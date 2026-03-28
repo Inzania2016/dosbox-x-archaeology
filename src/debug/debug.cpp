@@ -165,7 +165,12 @@ static void TraceMakeLiveLabel(char* dst, size_t dst_size);
 static void DEBUG_LiveTraceSnap_Handler(bool pressed);
 bool DEBUG_TraceIsActive(void);
 void DEBUG_TraceGuestAction(const char* action_label, const char* guest_key_name);
+void DEBUG_TraceFileOpen(const char* name, const char* fullname, uint8_t flags, uint16_t entry, uint16_t handle, uint8_t drive, bool fcb);
+void DEBUG_TraceFileRead(uint16_t handle, const char* name, uint16_t requested, uint16_t actual, bool ret, bool fcb);
+void DEBUG_TraceFileSeek(uint16_t handle, const char* name, uint32_t pos, uint32_t type, bool ret, bool fcb);
+void DEBUG_TraceFileClose(uint16_t handle, const char* name, uint8_t refs, bool ret, bool fcb);
 static void TraceWriteEscaped(FILE* f, const char* s);
+static bool TraceBeginEvent(const char* event_name);
 static uint32_t TraceReadBytes(uint16_t seg, uint32_t ofs, uint8_t* dst, uint32_t num);
 static void TraceWriteHexBuffer(FILE* f, const uint8_t* data, uint32_t num);
 static uint32_t TraceCountChanged(const uint8_t* prev, const uint8_t* cur, uint32_t num);
@@ -6043,6 +6048,16 @@ static void TraceWriteEscaped(FILE* f, const char* s) {
     }
 }
 
+static bool TraceBeginEvent(const char* event_name) {
+    if(traceFile == NULL || event_name == NULL || *event_name == 0)
+        return false;
+
+    fprintf(traceFile, "{\"event\":\"");
+    TraceWriteEscaped(traceFile, event_name);
+    fprintf(traceFile, "\"");
+    return true;
+}
+
 static uint32_t TraceReadBytes(uint16_t seg, uint32_t ofs, uint8_t* dst, uint32_t num) {
     uint32_t ok = 0;
     for(uint32_t i = 0; i < num; i++) {
@@ -6180,7 +6195,10 @@ void DEBUG_TraceGuestAction(const char* action_label, const char* guest_key_name
 
     TraceMakeActionLabel(action, label, sizeof(label));
 
-    fprintf(traceFile, "{\"event\":\"guest_action\",\"label\":\"");
+    if(!TraceBeginEvent("guest_action"))
+        return;
+
+    fprintf(traceFile, ",\"label\":\"");
     TraceWriteEscaped(traceFile, label);
     fprintf(traceFile, "\",\"action\":\"");
     TraceWriteEscaped(traceFile, action);
@@ -6190,6 +6208,84 @@ void DEBUG_TraceGuestAction(const char* action_label, const char* guest_key_name
     fflush(traceFile);
 
     TraceSnap(label);
+}
+
+void DEBUG_TraceFileOpen(const char* name, const char* fullname, uint8_t flags, uint16_t entry, uint16_t handle, uint8_t drive, bool fcb) {
+    const char* event_name = (name != NULL && *name != 0) ? name : "unknown";
+
+    if(!TraceBeginEvent("file_open"))
+        return;
+
+    fprintf(traceFile, ",\"name\":\"");
+    TraceWriteEscaped(traceFile, event_name);
+    fprintf(traceFile, "\"");
+
+    if(fullname != NULL && *fullname != 0) {
+        fprintf(traceFile, ",\"fullname\":\"");
+        TraceWriteEscaped(traceFile, fullname);
+        fprintf(traceFile, "\"");
+    }
+
+    fprintf(traceFile, ",\"flags\":%u", (unsigned int)flags);
+    fprintf(traceFile, ",\"entry\":%u", (unsigned int)entry);
+    fprintf(traceFile, ",\"handle\":%u", (unsigned int)handle);
+    fprintf(traceFile, ",\"drive\":%u", (unsigned int)drive);
+    fprintf(traceFile, ",\"fcb\":%s", fcb ? "true" : "false");
+    fprintf(traceFile, "}\n");
+    fflush(traceFile);
+}
+
+void DEBUG_TraceFileRead(uint16_t handle, const char* name, uint16_t requested, uint16_t actual, bool ret, bool fcb) {
+    const char* event_name = (name != NULL && *name != 0) ? name : "unknown";
+
+    if(!TraceBeginEvent("file_read"))
+        return;
+
+    fprintf(traceFile, ",\"handle\":%u", (unsigned int)handle);
+    fprintf(traceFile, ",\"name\":\"");
+    TraceWriteEscaped(traceFile, event_name);
+    fprintf(traceFile, "\"");
+    fprintf(traceFile, ",\"requested\":%u", (unsigned int)requested);
+    fprintf(traceFile, ",\"actual\":%u", (unsigned int)actual);
+    fprintf(traceFile, ",\"ret\":%s", ret ? "true" : "false");
+    fprintf(traceFile, ",\"fcb\":%s", fcb ? "true" : "false");
+    fprintf(traceFile, "}\n");
+    fflush(traceFile);
+}
+
+void DEBUG_TraceFileSeek(uint16_t handle, const char* name, uint32_t pos, uint32_t type, bool ret, bool fcb) {
+    const char* event_name = (name != NULL && *name != 0) ? name : "unknown";
+
+    if(!TraceBeginEvent("file_seek"))
+        return;
+
+    fprintf(traceFile, ",\"handle\":%u", (unsigned int)handle);
+    fprintf(traceFile, ",\"name\":\"");
+    TraceWriteEscaped(traceFile, event_name);
+    fprintf(traceFile, "\"");
+    fprintf(traceFile, ",\"pos\":%lu", (unsigned long)pos);
+    fprintf(traceFile, ",\"type\":%lu", (unsigned long)type);
+    fprintf(traceFile, ",\"ret\":%s", ret ? "true" : "false");
+    fprintf(traceFile, ",\"fcb\":%s", fcb ? "true" : "false");
+    fprintf(traceFile, "}\n");
+    fflush(traceFile);
+}
+
+void DEBUG_TraceFileClose(uint16_t handle, const char* name, uint8_t refs, bool ret, bool fcb) {
+    const char* event_name = (name != NULL && *name != 0) ? name : "unknown";
+
+    if(!TraceBeginEvent("file_close"))
+        return;
+
+    fprintf(traceFile, ",\"handle\":%u", (unsigned int)handle);
+    fprintf(traceFile, ",\"name\":\"");
+    TraceWriteEscaped(traceFile, event_name);
+    fprintf(traceFile, "\"");
+    fprintf(traceFile, ",\"refs\":%u", (unsigned int)refs);
+    fprintf(traceFile, ",\"ret\":%s", ret ? "true" : "false");
+    fprintf(traceFile, ",\"fcb\":%s", fcb ? "true" : "false");
+    fprintf(traceFile, "}\n");
+    fflush(traceFile);
 }
 
 static void DEBUG_LiveTraceSnap_Handler(bool pressed) {

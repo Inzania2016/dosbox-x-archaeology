@@ -29,6 +29,29 @@ Bitu DEBUG_EnableDebugger(void);
 extern Bitu cycle_count;
 extern Bitu debugCallback;
 
+#if C_DEBUG
+bool DEBUG_TraceIsActive(void);
+void DEBUG_TraceGuestAction(const char* action_label, const char* guest_key_name);
+void DEBUG_TraceFileOpen(const char* name, const char* fullname, uint8_t flags, uint16_t entry, uint16_t handle, uint8_t drive, bool fcb);
+void DEBUG_TraceFileRead(uint16_t handle, const char* name, uint16_t requested, uint16_t actual, bool ret, bool fcb);
+void DEBUG_TraceFileSeek(uint16_t handle, const char* name, uint32_t pos, uint32_t type, bool ret, bool fcb);
+void DEBUG_TraceFileClose(uint16_t handle, const char* name, uint8_t refs, bool ret, bool fcb);
+#else
+static inline bool DEBUG_TraceIsActive(void) {
+	return false;
+}
+static inline void DEBUG_TraceGuestAction(const char* /*action_label*/, const char* /*guest_key_name*/) {
+}
+static inline void DEBUG_TraceFileOpen(const char* /*name*/, const char* /*fullname*/, uint8_t /*flags*/, uint16_t /*entry*/, uint16_t /*handle*/, uint8_t /*drive*/, bool /*fcb*/) {
+}
+static inline void DEBUG_TraceFileRead(uint16_t /*handle*/, const char* /*name*/, uint16_t /*requested*/, uint16_t /*actual*/, bool /*ret*/, bool /*fcb*/) {
+}
+static inline void DEBUG_TraceFileSeek(uint16_t /*handle*/, const char* /*name*/, uint32_t /*pos*/, uint32_t /*type*/, bool /*ret*/, bool /*fcb*/) {
+}
+static inline void DEBUG_TraceFileClose(uint16_t /*handle*/, const char* /*name*/, uint8_t /*refs*/, bool /*ret*/, bool /*fcb*/) {
+}
+#endif
+
 #ifdef C_HEAVY_DEBUG
 bool DEBUG_HeavyIsBreakpoint(void);
 void DEBUG_HeavyWriteLogInstruction(void);
