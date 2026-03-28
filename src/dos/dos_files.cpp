@@ -39,6 +39,7 @@
 #include "cdrom.h"
 #include "ide.h"
 #include "bios_disk.h"
+#include "debug.h"
 
 #define DOS_FILESTART 4
 
@@ -826,8 +827,11 @@ bool DOS_ReadFile(uint16_t entry,uint8_t * data,uint16_t * amount,bool fcb) {
 	}
 */
 	uint16_t toread=*amount;
+	const uint16_t requested = toread;
+	const char* trace_name = Files[handle]->name;
 	bool ret=Files[handle]->Read(data,&toread);
 	*amount=toread;
+	DEBUG_TraceFileRead((uint16_t)handle, trace_name, requested, toread, ret, fcb);
 	return ret;
 }
 
@@ -884,7 +888,10 @@ bool DOS_SeekFile(uint16_t entry,uint32_t * pos,uint32_t type,bool fcb) {
 		LOG(LOG_FILES, LOG_DEBUG)("Seeking to %d bytes from position type (%d) in %s ", *pos, type, Files[handle]->name);
 	}
 
-	return Files[handle]->Seek(pos,type);
+	const char* trace_name = Files[handle]->name;
+	bool ret = Files[handle]->Seek(pos,type);
+	DEBUG_TraceFileSeek((uint16_t)handle, trace_name, *pos, type, ret, fcb);
+	return ret;
 }
 
 /* ert, 20100711: Locking extensions */
@@ -903,6 +910,8 @@ bool DOS_LockFile(uint16_t entry,uint8_t mode,uint32_t pos,uint32_t size) {
 
 bool DOS_CloseFile(uint16_t entry, bool fcb, uint8_t * refcnt) {
 	uint32_t handle = fcb?entry:RealHandle(entry);
+	char trace_name[DOS_PATHLENGTH];
+	trace_name[0] = 0;
 	if (handle>=DOS_FILES) {
 		DOS_SetError(DOSERR_INVALID_HANDLE);
 		return false;
@@ -917,6 +926,10 @@ bool DOS_CloseFile(uint16_t entry, bool fcb, uint8_t * refcnt) {
 		DOS_SetError(DOSERR_INVALID_HANDLE);
 		return false;
 	}
+	if (Files[handle]->name)
+		safe_strncpy(trace_name, Files[handle]->name, sizeof(trace_name));
+	else
+		safe_strncpy(trace_name, "unknown", sizeof(trace_name));
     if (Files[handle]->IsOpen()) {
         if (log_fileio) {
             LOG(LOG_FILES, LOG_NORMAL)("Closing file %s", Files[handle]->name);
@@ -933,6 +946,7 @@ bool DOS_CloseFile(uint16_t entry, bool fcb, uint8_t * refcnt) {
 		Files[handle]=nullptr;
 	}
 	if (refcnt!=NULL) *refcnt=static_cast<uint8_t>(refs+1);
+	DEBUG_TraceFileClose((uint16_t)handle, trace_name, (uint8_t)(refs > 0 ? refs : 0), true, fcb);
 	return true;
 }
 
@@ -1105,6 +1119,7 @@ bool DOS_OpenFile(char const * name,uint8_t flags,uint16_t * entry,bool fcb) {
 		Files[handle]->AddRef();
 		psp.SetFileHandle(*entry,handle);
 		Files[handle]->drive = drive;
+		DEBUG_TraceFileOpen(name, fullname, flags, *entry, handle, drive, fcb);
 		return true;
 	} else {
 		//Test if file exists, but opened in read-write mode (and writeprotected)
