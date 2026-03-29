@@ -230,6 +230,7 @@ Bits CPU_Core8086_Prefetch_Run(void) {
 		BaseSS=SegBase(ss);
 		core.base_val_ds=ds;
 #if C_DEBUG
+		DEBUG_TraceCodeHitCheck();
 #if C_HEAVY_DEBUG
 		if (DEBUG_HeavyIsBreakpoint()) {
 			FillFlags();

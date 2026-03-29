@@ -177,6 +177,10 @@ static uint32_t TraceCountChanged(const uint8_t* prev, const uint8_t* cur, uint3
 static void TraceWriteChangedOffsets(FILE* f, uint32_t baseOfs, const uint8_t* prev, const uint8_t* cur, uint32_t num, uint32_t max_items);
 static void TraceWriteChangedSlots(FILE* f, const uint8_t* prev, const uint8_t* cur, uint32_t slot_size, uint32_t slot_count);
 static void TraceWriteChangedSlotRecords(FILE* f, const uint8_t* prev, const uint8_t* cur, uint32_t slot_size, uint32_t slot_count);
+static uint8_t TraceReadByte(uint16_t seg, uint32_t ofs);
+static void TraceWriteSuspects(FILE* f, uint16_t seg);
+static void TraceWriteSuspectChanges(FILE* f, uint16_t seg);
+static void TraceEmitCodeHit(void);
 static void LogMCBS(void);
 static void LogGDT(void);
 static void LogLDT(void);
@@ -206,6 +210,23 @@ static uint8_t tracePrev5000[0x400];
 static uint8_t tracePrev53EA[0x08];
 static uint8_t tracePrev535C[0x01];
 static uint8_t tracePrev53E0[0x02];
+static bool traceLastCodeHitValid = false;
+static uint16_t traceLastCodeHitCS = 0;
+static uint32_t traceLastCodeHitIP = 0;
+
+static const uint16_t traceSuspectOffsets[] = {
+    0x53EA, 0x53EB, 0x53EC, 0x53ED, 0x53EE, 0x53EF, 0x53F0, 0x53F1,
+    0x535C, 0x53E0, 0x53E1
+};
+
+struct TraceCodeWatchIP {
+    const char* label;
+    uint32_t ip;
+};
+
+static const TraceCodeWatchIP traceCodeWatchIPs[] = {
+    { "MAIN1FBC", 0x1FBCu },
+};
 
 void DEBUG_DrawInput(void) {
     DrawInput();
@@ -6068,6 +6089,13 @@ static uint32_t TraceReadBytes(uint16_t seg, uint32_t ofs, uint8_t* dst, uint32_
     return ok;
 }
 
+static uint8_t TraceReadByte(uint16_t seg, uint32_t ofs) {
+    uint8_t value = 0;
+    if(mem_readb_checked((PhysPt)GetAddress(seg, ofs), &value))
+        return 0;
+    return value;
+}
+
 static void TraceWriteHexBuffer(FILE* f, const uint8_t* data, uint32_t num) {
     for(uint32_t i = 0; i < num; i++)
         fprintf(f, "%02X", (unsigned int)data[i]);
@@ -6141,6 +6169,78 @@ static void TraceWriteChangedSlotRecords(FILE* f, const uint8_t* prev, const uin
     fputc(']', f);
 }
 
+static void TraceWriteSuspects(FILE* f, uint16_t seg) {
+    const size_t count = sizeof(traceSuspectOffsets) / sizeof(traceSuspectOffsets[0]);
+    fputc('{', f);
+    for(size_t i = 0; i < count; ++i) {
+        if(i != 0)
+            fputc(',', f);
+        fprintf(f, "\"%04X\":\"%02X\"",
+                (unsigned int)traceSuspectOffsets[i],
+                (unsigned int)TraceReadByte(seg, traceSuspectOffsets[i]));
+    }
+    fputc('}', f);
+}
+
+static void TraceWriteSuspectChanges(FILE* f, uint16_t seg) {
+    const size_t count = sizeof(traceSuspectOffsets) / sizeof(traceSuspectOffsets[0]);
+    bool emitted = false;
+    fputc('[', f);
+    for(size_t i = 0; i < count; ++i) {
+        const uint16_t ofs = traceSuspectOffsets[i];
+        const uint8_t cur = TraceReadByte(seg, ofs);
+        const uint8_t prev = traceHasPrev ? tracePrev5000[ofs - 0x5000u] : 0;
+        if(traceHasPrev && prev == cur)
+            continue;
+        if(emitted)
+            fputc(',', f);
+        fprintf(f, "{\"ofs\":\"%04X\",\"prev\":\"%02X\",\"cur\":\"%02X\"}",
+                (unsigned int)ofs, (unsigned int)prev, (unsigned int)cur);
+        emitted = true;
+    }
+    fputc(']', f);
+}
+
+static void TraceEmitCodeHit(void) {
+    if(traceFile == NULL)
+        return;
+
+    const uint16_t cs_now = SegValue(cs);
+    const uint32_t ip_now = reg_eip;
+    const size_t watch_count = sizeof(traceCodeWatchIPs) / sizeof(traceCodeWatchIPs[0]);
+    const char* label = NULL;
+
+    for(size_t i = 0; i < watch_count; ++i) {
+        if(traceCodeWatchIPs[i].ip == ip_now) {
+            label = traceCodeWatchIPs[i].label;
+            break;
+        }
+    }
+
+    if(label == NULL) {
+        traceLastCodeHitValid = false;
+        return;
+    }
+
+    if(traceLastCodeHitValid && traceLastCodeHitCS == cs_now && traceLastCodeHitIP == ip_now)
+        return;
+
+    if(!TraceBeginEvent("codehit"))
+        return;
+
+    fprintf(traceFile, ",\"label\":\"");
+    TraceWriteEscaped(traceFile, label);
+    fprintf(traceFile, "\"");
+    fprintf(traceFile, ",\"cs\":\"%04X\"", (unsigned int)cs_now);
+    fprintf(traceFile, ",\"ip\":\"%08X\"", (unsigned int)ip_now);
+    fprintf(traceFile, "}\n");
+    fflush(traceFile);
+
+    traceLastCodeHitValid = true;
+    traceLastCodeHitCS = cs_now;
+    traceLastCodeHitIP = ip_now;
+}
+
 static void TraceMakeLiveLabel(char* dst, size_t dst_size) {
     time_t now = time(NULL);
     struct tm tm_now;
@@ -6183,6 +6283,10 @@ static void TraceMakeActionLabel(const char* prefix, char* dst, size_t dst_size)
 
 bool DEBUG_TraceIsActive(void) {
     return traceFile != NULL;
+}
+
+void DEBUG_TraceCodeHitCheck(void) {
+    TraceEmitCodeHit();
 }
 
 void DEBUG_TraceGuestAction(const char* action_label, const char* guest_key_name) {
@@ -6319,6 +6423,7 @@ static bool TraceOpen(const char* path) {
     }
 
     tracePath = path;
+    traceLastCodeHitValid = false;
     fprintf(traceFile, "{\"event\":\"trace_open\",\"path\":\"");
     TraceWriteEscaped(traceFile, path);
     fprintf(traceFile, "\"}\n");
@@ -6338,6 +6443,7 @@ static void TraceClose(void) {
 
     tracePath.clear();
     traceHasPrev = false;
+    traceLastCodeHitValid = false;
 }
 
 static void TraceAction(const char* label) {
@@ -6416,6 +6522,10 @@ static void TraceSnap(const char* label) {
     TraceWriteHexBuffer(traceFile, cur53E0, 0x02);
     fprintf(traceFile, "\"},");
 
+    fprintf(traceFile, "\"suspects\":");
+    TraceWriteSuspects(traceFile, 0x1787);
+    fprintf(traceFile, ",");
+
     fprintf(traceFile, "\"delta\":{");
     fprintf(traceFile, "\"has_prev\":%s", traceHasPrev ? "true" : "false");
 
@@ -6437,6 +6547,9 @@ static void TraceSnap(const char* label) {
         fprintf(traceFile, ",\"byte_535c_changed\":%s", (tracePrev535C[0] != cur535C[0]) ? "true" : "false");
         fprintf(traceFile, ",\"word_53e0_changed\":%s", ((tracePrev53E0[0] != cur53E0[0]) || (tracePrev53E0[1] != cur53E0[1])) ? "true" : "false");
     }
+
+    fprintf(traceFile, ",\"suspectchanges\":");
+    TraceWriteSuspectChanges(traceFile, 0x1787);
 
     fprintf(traceFile, "}}");
     fprintf(traceFile, "\n");
