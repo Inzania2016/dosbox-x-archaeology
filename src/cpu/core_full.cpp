@@ -95,6 +95,7 @@ Bits CPU_Core_Full_Run(void) {
 		}
 
 #if C_DEBUG		
+		DEBUG_TraceCodeHitCheck();
 #if C_HEAVY_DEBUG
 		if (DEBUG_HeavyIsBreakpoint()) {
 			FillFlags();

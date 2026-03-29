@@ -197,6 +197,7 @@ Bits CPU_Core8086_Normal_Run(void) {
 		BaseSS=SegBase(ss);
 		core.base_val_ds=ds;
 #if C_DEBUG
+		DEBUG_TraceCodeHitCheck();
 #if C_HEAVY_DEBUG
 		if (DEBUG_HeavyIsBreakpoint()) {
 			FillFlags();
@@ -267,4 +268,3 @@ Bits CPU_Core8086_Normal_Trap_Run(void) {
 void CPU_Core8086_Normal_Init(void) {
 
 }
-
