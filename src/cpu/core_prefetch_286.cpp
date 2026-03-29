@@ -221,6 +221,7 @@ Bits CPU_Core286_Prefetch_Run(void) {
 		BaseSS=SegBase(ss);
 		core.base_val_ds=ds;
 #if C_DEBUG
+		DEBUG_TraceCodeHitCheck();
 #if C_HEAVY_DEBUG
 		if (DEBUG_HeavyIsBreakpoint()) {
 			FillFlags();
@@ -325,4 +326,3 @@ Bits CPU_Core_Prefetch_Trap_Run(void) {
 
 	return ret;
 }
-
