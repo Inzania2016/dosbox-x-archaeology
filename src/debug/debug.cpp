@@ -177,6 +177,10 @@ static uint32_t TraceCountChanged(const uint8_t* prev, const uint8_t* cur, uint3
 static void TraceWriteChangedOffsets(FILE* f, uint32_t baseOfs, const uint8_t* prev, const uint8_t* cur, uint32_t num, uint32_t max_items);
 static void TraceWriteChangedSlots(FILE* f, const uint8_t* prev, const uint8_t* cur, uint32_t slot_size, uint32_t slot_count);
 static void TraceWriteChangedSlotRecords(FILE* f, const uint8_t* prev, const uint8_t* cur, uint32_t slot_size, uint32_t slot_count);
+static uint8_t TraceReadByte(uint16_t seg, uint32_t ofs);
+static void TraceWriteSuspects(FILE* f, const uint8_t* values, size_t count);
+static void TraceWriteSuspectChanges(FILE* f, const uint8_t* before, const uint8_t* after, size_t count);
+static void TraceEmitCodeHit(void);
 static void LogMCBS(void);
 static void LogGDT(void);
 static void LogLDT(void);
@@ -206,6 +210,37 @@ static uint8_t tracePrev5000[0x400];
 static uint8_t tracePrev53EA[0x08];
 static uint8_t tracePrev535C[0x01];
 static uint8_t tracePrev53E0[0x02];
+static std::string traceLastGuestAction;
+static uint16_t traceLastCodeHitCS = 0;
+static uint32_t traceLastCodeHitIP = 0xffffffffUL;
+
+struct TraceSuspectDef {
+    uint32_t ofs;
+    const char* name;
+};
+
+static const TraceSuspectDef traceSuspectDefs[] = {
+    {0x52C8, "52C8"}, {0x52CC, "52CC"}, {0x52CE, "52CE"}, {0x5350, "5350"},
+    {0x5356, "5356"}, {0x535A, "535A"}, {0x5362, "5362"}, {0x5363, "5363"},
+    {0x5386, "5386"}, {0x5388, "5388"}, {0x538A, "538A"}, {0x538C, "538C"},
+    {0x538E, "538E"}, {0x5394, "5394"}, {0x5396, "5396"}, {0x5398, "5398"},
+    {0x539A, "539A"}, {0x53AA, "53AA"}, {0x53AB, "53AB"}, {0x53EA, "53EA"},
+    {0x53EB, "53EB"}, {0x53EC, "53EC"}, {0x53ED, "53ED"}, {0x53EE, "53EE"},
+    {0x53EF, "53EF"}, {0x53F0, "53F0"}, {0x53F1, "53F1"},
+};
+static uint8_t tracePrevSuspects[sizeof(traceSuspectDefs) / sizeof(traceSuspectDefs[0])];
+
+struct TraceCodeHitDef {
+    uint16_t ip;
+    const char* label;
+};
+
+static const TraceCodeHitDef traceCodeHitDefs[] = {
+    {0x0B2D, "MAIN0B2D"}, {0x0C9C, "MAIN0C9C"}, {0x0F90, "MAIN0F90"},
+    {0x1184, "MAIN1184"}, {0x16BA, "MAIN16BA"}, {0x16C9, "MAIN16C9"},
+    {0x1714, "MAIN1714"}, {0x1F12, "MAIN1F12"}, {0x1F77, "MAIN1F77"},
+    {0x1FBC, "MAIN1FBC"},
+};
 
 void DEBUG_DrawInput(void) {
     DrawInput();
@@ -6068,6 +6103,12 @@ static uint32_t TraceReadBytes(uint16_t seg, uint32_t ofs, uint8_t* dst, uint32_
     return ok;
 }
 
+static uint8_t TraceReadByte(uint16_t seg, uint32_t ofs) {
+    uint8_t value = 0;
+    TraceReadBytes(seg, ofs, &value, 1);
+    return value;
+}
+
 static void TraceWriteHexBuffer(FILE* f, const uint8_t* data, uint32_t num) {
     for(uint32_t i = 0; i < num; i++)
         fprintf(f, "%02X", (unsigned int)data[i]);
@@ -6141,6 +6182,67 @@ static void TraceWriteChangedSlotRecords(FILE* f, const uint8_t* prev, const uin
     fputc(']', f);
 }
 
+static void TraceWriteSuspects(FILE* f, const uint8_t* values, size_t count) {
+    for(size_t i = 0; i < count; i++) {
+        if(i != 0)
+            fprintf(f, ",");
+
+        fprintf(f, "\"%s\":%u", traceSuspectDefs[i].name, (unsigned int)values[i]);
+    }
+}
+
+static void TraceWriteSuspectChanges(FILE* f, const uint8_t* before, const uint8_t* after, size_t count) {
+    bool first = true;
+
+    for(size_t i = 0; i < count; i++) {
+        if(before[i] == after[i])
+            continue;
+
+        if(!first)
+            fprintf(f, ",");
+
+        first = false;
+        fprintf(f, "\"%s\":{\"before\":%u,\"after\":%u}",
+                traceSuspectDefs[i].name,
+                (unsigned int)before[i],
+                (unsigned int)after[i]);
+    }
+}
+
+static void TraceEmitCodeHit(void) {
+    if(traceFile == NULL)
+        return;
+
+    const uint16_t cur_cs = SegValue(cs);
+    const uint32_t cur_ip = reg_eip;
+
+    for(size_t i = 0; i < (sizeof(traceCodeHitDefs) / sizeof(traceCodeHitDefs[0])); i++) {
+        if(cur_ip != traceCodeHitDefs[i].ip)
+            continue;
+
+        if(cur_cs == traceLastCodeHitCS && cur_ip == traceLastCodeHitIP)
+            return;
+
+        if(!TraceBeginEvent("codehit"))
+            return;
+
+        fprintf(traceFile, ",\"cs\":\"%04X\"", (unsigned int)cur_cs);
+        fprintf(traceFile, ",\"ip\":\"%04X\"", (unsigned int)cur_ip);
+        fprintf(traceFile, ",\"label\":\"%s\"", traceCodeHitDefs[i].label);
+        if(!traceLastGuestAction.empty()) {
+            fprintf(traceFile, ",\"guestaction\":\"");
+            TraceWriteEscaped(traceFile, traceLastGuestAction.c_str());
+            fprintf(traceFile, "\"");
+        }
+        fprintf(traceFile, "}\n");
+        fflush(traceFile);
+
+        traceLastCodeHitCS = cur_cs;
+        traceLastCodeHitIP = cur_ip;
+        return;
+    }
+}
+
 static void TraceMakeLiveLabel(char* dst, size_t dst_size) {
     time_t now = time(NULL);
     struct tm tm_now;
@@ -6193,6 +6295,7 @@ void DEBUG_TraceGuestAction(const char* action_label, const char* guest_key_name
     if(traceFile == NULL)
         return;
 
+    traceLastGuestAction = action;
     TraceMakeActionLabel(action, label, sizeof(label));
 
     if(!TraceBeginEvent("guest_action"))
@@ -6309,6 +6412,9 @@ static bool TraceOpen(const char* path) {
     }
 
     traceHasPrev = false;
+    traceLastGuestAction.clear();
+    traceLastCodeHitCS = 0;
+    traceLastCodeHitIP = 0xffffffffUL;
     if(path == NULL || *path == 0)
         path = "TRACE.JSONL";
 
@@ -6338,6 +6444,9 @@ static void TraceClose(void) {
 
     tracePath.clear();
     traceHasPrev = false;
+    traceLastGuestAction.clear();
+    traceLastCodeHitCS = 0;
+    traceLastCodeHitIP = 0xffffffffUL;
 }
 
 static void TraceAction(const char* label) {
@@ -6348,6 +6457,8 @@ static void TraceAction(const char* label) {
 
     if(label == NULL || *label == 0)
         label = "ACTION";
+
+    traceLastGuestAction = label;
 
     fprintf(traceFile, "{\"event\":\"action\",\"label\":\"");
     TraceWriteEscaped(traceFile, label);
@@ -6363,6 +6474,7 @@ static void TraceSnap(const char* label) {
     uint8_t cur53EA[0x08];
     uint8_t cur535C[0x01];
     uint8_t cur53E0[0x02];
+    uint8_t curSuspects[sizeof(traceSuspectDefs) / sizeof(traceSuspectDefs[0])];
 
     if(traceFile == NULL) {
         DEBUG_ShowMsg("DEBUG: TRACEOUT must be set first.\n");
@@ -6377,6 +6489,8 @@ static void TraceSnap(const char* label) {
     TraceReadBytes(0x1787, 0x53EA, cur53EA, 0x08);
     TraceReadBytes(0x1787, 0x535C, cur535C, 0x01);
     TraceReadBytes(0x1787, 0x53E0, cur53E0, 0x02);
+    for(size_t i = 0; i < (sizeof(traceSuspectDefs) / sizeof(traceSuspectDefs[0])); i++)
+        curSuspects[i] = TraceReadByte(0x1787, traceSuspectDefs[i].ofs);
 
     fprintf(traceFile, "{\"event\":\"snapshot\",\"label\":\"");
     TraceWriteEscaped(traceFile, label);
@@ -6416,6 +6530,10 @@ static void TraceSnap(const char* label) {
     TraceWriteHexBuffer(traceFile, cur53E0, 0x02);
     fprintf(traceFile, "\"},");
 
+    fprintf(traceFile, "\"suspects\":{");
+    TraceWriteSuspects(traceFile, curSuspects, sizeof(curSuspects) / sizeof(curSuspects[0]));
+    fprintf(traceFile, "},");
+
     fprintf(traceFile, "\"delta\":{");
     fprintf(traceFile, "\"has_prev\":%s", traceHasPrev ? "true" : "false");
 
@@ -6436,6 +6554,9 @@ static void TraceSnap(const char* label) {
 
         fprintf(traceFile, ",\"byte_535c_changed\":%s", (tracePrev535C[0] != cur535C[0]) ? "true" : "false");
         fprintf(traceFile, ",\"word_53e0_changed\":%s", ((tracePrev53E0[0] != cur53E0[0]) || (tracePrev53E0[1] != cur53E0[1])) ? "true" : "false");
+        fprintf(traceFile, ",\"suspectchanges\":{");
+        TraceWriteSuspectChanges(traceFile, tracePrevSuspects, curSuspects, sizeof(curSuspects) / sizeof(curSuspects[0]));
+        fprintf(traceFile, "}");
     }
 
     fprintf(traceFile, "}}");
@@ -6447,6 +6568,7 @@ static void TraceSnap(const char* label) {
     memcpy(tracePrev53EA, cur53EA, sizeof(tracePrev53EA));
     memcpy(tracePrev535C, cur535C, sizeof(tracePrev535C));
     memcpy(tracePrev53E0, cur53E0, sizeof(tracePrev53E0));
+    memcpy(tracePrevSuspects, curSuspects, sizeof(tracePrevSuspects));
     traceHasPrev = true;
 
     DEBUG_ShowMsg("DEBUG: Trace snapshot '%s' written.\n", label);
@@ -6655,6 +6777,8 @@ void DEBUG_HeavyWriteLogInstruction(void) {
 }
 
 bool DEBUG_HeavyIsBreakpoint(void) {
+    TraceEmitCodeHit();
+
     if(cpuLog) {
         if(cpuLogCounter > 0) {
             LogInstruction(SegValue(cs), reg_eip, cpuLogFile);
