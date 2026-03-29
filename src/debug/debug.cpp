@@ -6427,6 +6427,8 @@ static void TraceAction(const char* label) {
     if(label == NULL || *label == 0)
         label = "ACTION";
 
+    traceLastGuestAction = label;
+
     fprintf(traceFile, "{\"event\":\"action\",\"label\":\"");
     TraceWriteEscaped(traceFile, label);
     fprintf(traceFile, "\"}\n");
