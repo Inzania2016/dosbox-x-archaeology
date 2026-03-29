@@ -1576,7 +1576,15 @@ extern bool IsDebuggerActive(void);
 static char debug_u5_pending_action[32] = { 0 };
 static char debug_u5_pending_guest_key[32] = { 0 };
 static uint32_t debug_u5_pending_ticks = 0;
-static const uint32_t DEBUG_U5_PENDING_DIRECTION_TIMEOUT_MS = 1500;
+/*
+ * The original 1500ms timeout is a little too twitchy for real play/testing:
+ * if Joe pauses a beat after pressing LOOK / OPEN / TALK, the next arrow can
+ * fall through as plain MOVE_* and we lose the intended verb context.
+ *
+ * For archaeology traces, preserving intended verb context is more valuable
+ * than aggressively timing out to "safe" movement.
+ */
+static const uint32_t DEBUG_U5_PENDING_DIRECTION_TIMEOUT_MS = 8000;
 
 static const char* DEBUG_U5ActionLabelForEventName(const char* event_name) {
     if(event_name == NULL)
@@ -1671,7 +1679,7 @@ static void DEBUG_U5ExpirePendingDirectionalActionIfNeeded(void) {
         DEBUG_U5ClearPendingDirectionalAction();
 }
 
-static bool DEBUG_U5ShouldIgnoreKeyboardModifiers(const SDL_KeyboardEvent * key_event) {
+static bool DEBUG_U5ShouldIgnoreKeyboardModifiers(const SDL_KeyboardEvent* key_event) {
     if(key_event == NULL)
         return true;
 #if defined(C_SDL2)
@@ -1700,7 +1708,15 @@ static void DEBUG_U5TraceCombinedDirectionalAction(const char* direction_suffix,
     DEBUG_U5ClearPendingDirectionalAction();
 }
 
-static void DEBUG_U5MaybeAutoTraceGuestAction(SDL_Event * event, CBindList * list) {
+static void DEBUG_U5TraceStandaloneAction(const char* action_label, const char* guest_key_name) {
+    if(action_label == NULL || *action_label == 0)
+        return;
+
+    DEBUG_U5ClearPendingDirectionalAction();
+    DEBUG_TraceGuestAction(action_label, guest_key_name);
+}
+
+static void DEBUG_U5MaybeAutoTraceGuestAction(SDL_Event* event, CBindList* list) {
     if(event == NULL || list == NULL)
         return;
     if(event->type != SDL_KEYDOWN)
@@ -1751,12 +1767,12 @@ static void DEBUG_U5MaybeAutoTraceGuestAction(SDL_Event * event, CBindList * lis
             break;
         }
 
-        DEBUG_U5ClearPendingDirectionalAction();
-        DEBUG_TraceGuestAction(action_label, guest_key_name);
+        DEBUG_U5TraceStandaloneAction(action_label, guest_key_name);
         break;
     }
 }
 #endif
+
 
 class CKeyBindGroup : public  CBindGroup {
 public:
